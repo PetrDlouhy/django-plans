@@ -56,7 +56,7 @@ class Plan(OrderedModel):
     """
     name = models.CharField(_('name'), max_length=100)
     description = models.TextField(_('description'), blank=True)
-    default = models.BooleanField(default=False, db_index=True)
+    default = models.NullBooleanField(default=None, db_index=True, unique=True)
     available = models.BooleanField(
         _('available'), default=False, db_index=True,
         help_text=_('Is still available for purchase')
@@ -90,8 +90,6 @@ class Plan(OrderedModel):
     def get_default_plan(cls):
         try:
             return_value = cls.objects.get(default=True)
-        except cls.MultipleObjectsReturned:
-            return_value = cls.objects.first()
         except cls.DoesNotExist:
             return_value = None
         return return_value
