@@ -11,7 +11,7 @@ def create_userplans(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('plans', '0001_initial'),
+        ('plans', '0005_default_unique'),
     ]
 
     operations = [

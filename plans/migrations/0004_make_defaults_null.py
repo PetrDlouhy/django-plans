@@ -9,7 +9,7 @@ def set_default_null(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('plans', '0002_default_nullboolean'),
+        ('plans', '0003_default_nullboolean'),
     ]
 
     operations = [
