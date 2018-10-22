@@ -15,5 +15,5 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RunPython(create_userplans),
+        migrations.RunPython(create_userplans, reverse_code=migrations.RunPython.noop),
     ]
