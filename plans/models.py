@@ -498,7 +498,7 @@ class Order(models.Model):
 
     def complete_order(self):
         if self.completed is None:
-            if self.user.userplan.expire > date.today():
+            if self.user.userplan.expire and self.user.userplan.expire > date.today():
                 self.plan_extended_from = self.user.userplan.expire
             else:
                 self.plan_extended_from = date.today()
