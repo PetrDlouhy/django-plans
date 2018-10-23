@@ -75,6 +75,13 @@ class Plan(OrderedModel):
     quotas = models.ManyToManyField('Quota', through='PlanQuota')
     url = models.URLField(max_length=200, blank=True, help_text=_(
         'Optional link to page with more information (for clickable pricing table headers)'))
+    max_plan_extension = models.PositiveIntegerField(
+        _('max plan extension time (days)'),
+        default=None,
+        blank=True,
+        null=True,
+        help_text=_('Plan could not be bouht if it would extend userplan beyond this period'),
+    )
 
     class Meta:
         ordering = ('order',)
@@ -261,12 +268,16 @@ class UserPlan(models.Model):
         else:
             # Processing standard account extending procedure
             if self.plan == plan:
-                status = True
                 if self.expire is not None and self.expire > date.today():
-                    self.expire += timedelta(days=pricing.period)
+                    expiration += timedelta(days=pricing.period)
                 else:
-                    self.expire = date.today() + timedelta(days=pricing.period)
+                    expiration = date.today() + timedelta(days=pricing.period)
 
+                if expiration > date.today() + self.plan.max_plan_extension:
+                    status = True
+                    self.expire = expiration
+                else:
+                    status = False
             else:
                 # This should not ever happen (as this case should be managed by plan change request)
                 # but just in case we consider a case when user has a different plan
