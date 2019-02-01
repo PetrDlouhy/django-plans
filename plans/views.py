@@ -265,6 +265,7 @@ class CreateOrderView(LoginRequired, CreateView):
         order.plan = self.plan_pricing.plan
         order.pricing = self.plan_pricing.pricing
         order.currency = self.get_currency()
+        order.user = self.request.user
         context['object'] = order
 
         self.validate_plan(order.plan)
@@ -324,6 +325,7 @@ class CreateOrderPlanChangeView(CreateOrderView):
         order = self.recalculate(price, context['billing_info'])
         order.pricing = None
         order.plan = self.plan
+        order.user = self.request.user
         context['billing_info'] = context['billing_info']
         context['object'] = order
         self.validate_plan(order.plan)
