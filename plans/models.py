@@ -239,8 +239,10 @@ class UserPlan(models.Model):
             self.activate()  # this will call self.save()
 
     def get_plan_extended_from(self, plan):
+        if plan.is_free():
+            return None
         if self.plan == plan:
-            if self.expire > date.today():
+            if self.expire is not None and self.expire > date.today():
                 return self.expire
             else:
                 return date.today()
@@ -248,7 +250,9 @@ class UserPlan(models.Model):
             return date.today()
 
     def get_plan_extended_until(self, plan, pricing):
-        if pricing is None or self.expire is None:
+        if plan.is_free():
+            return None
+        if pricing is None:
             return self.expire
         return self.get_plan_extended_from(plan) + timedelta(days=pricing.period)
 
