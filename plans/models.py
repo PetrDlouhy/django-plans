@@ -275,9 +275,9 @@ class UserPlan(models.Model):
             else:
                 # This should not ever happen (as this case should be managed by plan change request)
                 # but just in case we consider a case when user has a different plan
-                if not self.plan.is_free and self.expire is None:
+                if not self.plan.is_free() and self.expire is None:
                     status = True
-                elif not self.plan.is_free and self.expire > date.today():
+                elif not self.plan.is_free() and self.expire > date.today():
                     status = False
                     accounts_logger.warning("Account '%s' [id=%d] plan NOT changed to '%s' [id=%d]" % (
                         self.user, self.user.pk, plan, plan.pk))
