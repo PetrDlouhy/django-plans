@@ -4,7 +4,7 @@ django-plans changelog
 0.9.0
 ------
 
-* Added free plan support.
+* Added free plan support, fix expired quotas.
 * It is now ensured, that we have only one default migration.
 * Fix problem with changed `AUTH_USER_MODEL` and user link in `PlanAdmin`.
 * Added possibility to define `PLANS_VALIDATORS` as lazy imported string.
