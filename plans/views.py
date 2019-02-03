@@ -421,6 +421,11 @@ class BillingInfoCreateView(SuccessUrlMixin, LoginRequired, CreateView):
         self.object.save()
         return HttpResponseRedirect(self.get_success_url())
 
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs.update(request=self.request)
+        return kwargs
+
 
 class BillingInfoUpdateView(SuccessUrlMixin, LoginRequired, UpdateView):
     """
@@ -435,6 +440,11 @@ class BillingInfoUpdateView(SuccessUrlMixin, LoginRequired, UpdateView):
             return self.request.user.billinginfo
         except BillingInfo.DoesNotExist:
             raise Http404
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs.update(request=self.request)
+        return kwargs
 
 
 class BillingInfoDeleteView(LoginRequired, DeleteView):
