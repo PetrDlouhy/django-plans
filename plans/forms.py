@@ -51,7 +51,7 @@ class BillingInfoForm(forms.ModelForm):
               except ModuleNotFoundError:
                   ip_info = None
 
-              if ip_info:
+              if ip_info and 'country' in ip_info:
                   country_code = ip_info['country']['iso_code']
                   self.fields['country'].initial = country_code
               else:
