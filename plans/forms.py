@@ -35,6 +35,22 @@ class CreateOrderForm(forms.ModelForm):
         fields = tuple()
 
 
+def get_country_code(request):
+    try:
+        from geolite2 import geolite2
+        reader = geolite2.reader()
+        ip_address = get_client_ip(request)
+        ip_info = reader.get(ip_address)
+    except ModuleNotFoundError:
+        ip_info = None
+
+    if ip_info and 'country' in ip_info:
+        country_code = ip_info['country']['iso_code']
+        return country_code
+    else:
+        return settings.PLANS_TAX_COUNTRY
+
+
 class BillingInfoForm(forms.ModelForm):
     class Meta:
         model = BillingInfo
@@ -43,19 +59,7 @@ class BillingInfoForm(forms.ModelForm):
     def __init__(self, *args, request=None, **kwargs):
           ret_val = super().__init__(*args, **kwargs)
           if not self.instance.country:
-              try:
-                  from geolite2 import geolite2
-                  reader = geolite2.reader()
-                  ip_address = get_client_ip(request)
-                  ip_info = reader.get(ip_address)
-              except ModuleNotFoundError:
-                  ip_info = None
-
-              if ip_info and 'country' in ip_info:
-                  country_code = ip_info['country']['iso_code']
-                  self.fields['country'].initial = country_code
-              else:
-                  self.fields['country'].initial = settings.PLANS_TAX_COUNTRY
+              self.fields['country'].initial = get_country_code(request)
           return ret_val
 
 

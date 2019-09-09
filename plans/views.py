@@ -17,7 +17,7 @@ from itertools import chain
 from plans.importer import import_name
 from plans.mixins import LoginRequired
 from plans.models import UserPlan, PlanPricing, Plan, Order, BillingInfo
-from plans.forms import CreateOrderForm, BillingInfoForm, FakePaymentsForm
+from plans.forms import CreateOrderForm, BillingInfoForm, FakePaymentsForm, get_country_code
 from plans.models import Quota, Invoice
 from plans.signals import order_started
 from plans.validators import plan_validation
@@ -184,7 +184,9 @@ class CreateOrderView(LoginRequired, CreateView):
         order.amount = amount
         order.currency = self.get_currency()
         country = getattr(billing_info, 'country', None)
-        if not country is None:
+        if country is None:
+            country = get_country_code(self.request)
+        else:
             country = country.code
         tax_number = getattr(billing_info, 'tax_number', None)
 
