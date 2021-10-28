@@ -460,6 +460,22 @@ class RecurringUserPlan(models.Model):
     card_expire_month = models.IntegerField(null=True, blank=True)
     card_masked_number = models.CharField(null=True, blank=True, max_length=255)
 
+    def get_token(self):
+        return self.token
+
+    def set_recurrence(self, token, **kwargs):
+        self.token = token
+        self.has_automatic_renewal=True
+        for p, k in kwargs.items():
+            setattr(self, p, k)
+        self.save()
+
+    def get_unit(self):
+        return "days"
+
+    def get_period(self):
+        return self.pricing.period
+
     def create_renew_order(self):
         """
         Create order for plan renewal
