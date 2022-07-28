@@ -3,13 +3,28 @@ from copy import deepcopy
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.urls import reverse
-from ordered_model.admin import OrderedModelAdmin
-from django.utils.translation import gettext_lazy as _
 from django.utils.html import format_html
+from django.utils.translation import gettext_lazy as _
+from ordered_model.admin import OrderedModelAdmin
 
-from .models import UserPlan, Plan, PlanQuota, Quota, PlanPricing, Pricing, RecurringUserPlan, Order, BillingInfo
+from plans.base.models import (AbstractBillingInfo, AbstractInvoice,
+                               AbstractOrder, AbstractPlan,
+                               AbstractPlanPricing, AbstractPlanQuota,
+                               AbstractPricing, AbstractQuota,
+                               AbstractRecurringUserPlan, AbstractUserPlan)
+
 from .signals import account_automatic_renewal
-from plans.models import Invoice
+
+Invoice = AbstractInvoice.get_concrete_model()
+UserPlan = AbstractUserPlan.get_concrete_model()
+Plan = AbstractPlan.get_concrete_model()
+PlanQuota = AbstractPlanQuota.get_concrete_model()
+Quota = AbstractQuota.get_concrete_model()
+PlanPricing = AbstractPlanPricing.get_concrete_model()
+Pricing = AbstractPricing.get_concrete_model()
+RecurringUserPlan = AbstractRecurringUserPlan.get_concrete_model()
+Order = AbstractOrder.get_concrete_model()
+BillingInfo = AbstractBillingInfo.get_concrete_model()
 
 
 class UserLinkMixin(object):
@@ -38,6 +53,7 @@ class QuotaAdmin(OrderedModelAdmin):
         'is_boolean', 'move_up_down_links',
     ]
 
+    readonly_fields = ("created", "updated_at")
     list_display_links = list_display
 
 
@@ -78,6 +94,7 @@ class PlanAdmin(OrderedModelAdmin):
     inlines = (PlanPricingInline, PlanQuotaInline)
     list_select_related = True
     raw_id_fields = ('customized',)
+    readonly_fields = ("created", "updated_at")
     actions = [copy_plan, ]
 
     def queryset(self, request):
@@ -91,7 +108,7 @@ class BillingInfoAdmin(UserLinkMixin, admin.ModelAdmin):
     list_display = ('user', 'tax_number', 'name', 'street', 'zipcode', 'city', 'country')
     list_display_links = list_display
     list_select_related = True
-    readonly_fields = ('user_link',)
+    readonly_fields = ('user_link', "created", "updated_at")
     exclude = ('user',)
 
 
@@ -131,6 +148,7 @@ class OrderAdmin(admin.ModelAdmin):
         'tax', 'amount', 'currency', 'plan', 'pricing',
         'plan_extended_from', 'plan_extended_until',
     )
+    readonly_fields = ("created", "updated_at")
     list_display_links = list_display
     actions = [make_order_completed, make_order_invoice]
     inlines = (InvoiceInline, )
@@ -155,6 +173,7 @@ class InvoiceAdmin(admin.ModelAdmin):
         'full_number', 'issued', 'total_net', 'currency', 'user',
         'tax', 'buyer_name', 'buyer_city', 'buyer_tax_number'
     )
+    readonly_fields = ("created", "updated_at")
     list_display_links = list_display
     list_select_related = True
     raw_id_fields = ('user', 'order')
@@ -162,6 +181,7 @@ class InvoiceAdmin(admin.ModelAdmin):
 
 class RecurringPlanInline(admin.StackedInline):
     model = RecurringUserPlan
+    readonly_fields = ("created", "updated_at")
     extra = 0
 
 
@@ -189,10 +209,10 @@ class UserPlanAdmin(UserLinkMixin, admin.ModelAdmin):
     )
     list_display_links = list_display
     list_select_related = True
-    readonly_fields = ['user_link', ]
+    readonly_fields = ('user_link', "created", "updated_at")
     inlines = (RecurringPlanInline,)
     actions = [autorenew_payment, ]
-    fields = ('user', 'user_link', 'plan', 'expire', 'active')
+    fields = ('user', 'user_link', 'plan', 'expire', 'active', "created", "updated_at")
     raw_id_fields = ['user', 'plan', ]
 
     def recurring__automatic_renewal(self, obj):

@@ -1,41 +1,45 @@
-from decimal import Decimal
-import requests
 import random
-from datetime import date
-from datetime import timedelta
+from datetime import date, timedelta
+from decimal import Decimal
 from io import StringIO
-
-from internet_sabotage import no_connection
+from unittest import mock
 from unittest.mock import patch
+
+import requests
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.messages.storage.fallback import FallbackStorage
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.core import mail
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.core.management import call_command
 from django.db import transaction
 from django.db.models import Q
-from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
+from django.test import (RequestFactory, TestCase, TransactionTestCase,
+                         override_settings)
 from django.urls import reverse
-
 from django_concurrent_tests.helpers import call_concurrently
-
 from freezegun import freeze_time
-
+from internet_sabotage import no_connection
 from model_bakery import baker
 
 from plans import tasks
-from plans.models import BillingInfo, PlanPricing, Invoice, Order, Plan, UserPlan
+from plans.base.models import (AbstractBillingInfo, AbstractInvoice,
+                               AbstractOrder, AbstractPlan,
+                               AbstractPlanPricing, AbstractUserPlan)
 from plans.plan_change import PlanChangePolicy, StandardPlanChangePolicy
-from plans.taxation.eu import EUTaxationPolicy
 from plans.quota import get_user_quota
+from plans.taxation.eu import EUTaxationPolicy
 from plans.validators import ModelCountValidator
 from plans.views import CreateOrderView
 
-from unittest import mock
-
-
 User = get_user_model()
+BillingInfo = AbstractBillingInfo.get_concrete_model()
+PlanPricing = AbstractPlanPricing.get_concrete_model()
+Invoice = AbstractInvoice.get_concrete_model()
+Order = AbstractOrder.get_concrete_model()
+Plan = AbstractPlan.get_concrete_model()
+UserPlan = AbstractUserPlan.get_concrete_model()
 
 
 class PlansTestCase(TestCase):
@@ -502,7 +506,8 @@ class TestInvoice(TestCase):
             "{% endif %}/{{ invoice.issued|date:'Y' }}"
 
         def plans_invoice_counter_reset_function(invoice):
-            from plans.models import Invoice, get_initial_number
+            from plans.base.models import get_initial_number
+
             older_invoices = Invoice.objects.filter(
                 type=invoice.type,
                 issued__year=invoice.issued.year,
@@ -739,53 +744,53 @@ class EUTaxationPolicyTestCase(TestCase):
 
     def test_none(self):
         with self.settings(PLANS_TAX=Decimal('23.0'), PLANS_TAX_COUNTRY='PL'):
-            self.assertEqual(self.policy.get_tax_rate(None, None), Decimal('23.0'))
+            self.assertEqual(self.policy.get_tax_rate(None, None), (Decimal('23.0'), True))
 
     def test_private_nonEU(self):
         with self.settings(PLANS_TAX=Decimal('23.0'), PLANS_TAX_COUNTRY='PL'):
-            self.assertEqual(self.policy.get_tax_rate(None, 'RU'), None)
+            self.assertEqual(self.policy.get_tax_rate(None, 'RU'), (None, True))
 
     def test_private_EU_same(self):
         with self.settings(PLANS_TAX=Decimal('23.0'), PLANS_TAX_COUNTRY='PL'):
-            self.assertEqual(self.policy.get_tax_rate(None, 'PL'), Decimal('23.0'))
+            self.assertEqual(self.policy.get_tax_rate(None, 'PL'), (Decimal('23.0'), True))
 
     def test_private_EU_notsame(self):
         with self.settings(PLANS_TAX=Decimal('23.0'), PLANS_TAX_COUNTRY='PL'):
-            self.assertEqual(self.policy.get_tax_rate(None, 'AT'), Decimal('20.0'))
+            self.assertEqual(self.policy.get_tax_rate(None, 'AT'), (Decimal('20.0'), True))
 
     def test_company_nonEU(self):
         with self.settings(PLANS_TAX=Decimal('23.0'), PLANS_TAX_COUNTRY='PL'):
-            self.assertEqual(self.policy.get_tax_rate('123456', 'RU'), None)
+            self.assertEqual(self.policy.get_tax_rate('123456', 'RU'), (None, True))
 
     def test_company_EU_same(self):
         with self.settings(PLANS_TAX=Decimal('23.0'), PLANS_TAX_COUNTRY='PL'):
-            self.assertEqual(self.policy.get_tax_rate('123456', 'PL'), Decimal('23.0'))
+            self.assertEqual(self.policy.get_tax_rate('123456', 'PL'), (Decimal('23.0'), True))
 
     def test_company_EU_GR_vies_tax(self):
         """
         Test, that greece has VAT OK. Greece has code GR in django-countries, but EL in VIES
         Tax ID is not valid VAT ID, so tax is counted
         """
-        self.assertEqual(self.policy.get_tax_rate('123456', 'GR'), 24)
+        self.assertEqual(self.policy.get_tax_rate('123456', 'GR'), (24, False))
 
     def test_company_EU_GR_vies_zero(self):
         """
         Test, that greece has VAT OK. Greece has code GR in django-countries, but EL in VIES
         Tax ID is valid VAT ID, so no tax is counted
         """
-        self.assertEqual(self.policy.get_tax_rate('EL090145420', 'GR'), None)
+        self.assertEqual(self.policy.get_tax_rate('EL090145420', 'GR'), (None, True))
 
     @mock.patch("stdnum.eu.vat.check_vies")
     def test_company_EU_notsame_vies_ok(self, mock_check):
         mock_check.return_value = {'valid': True}
         with self.settings(PLANS_TAX=Decimal('23.0'), PLANS_TAX_COUNTRY='PL'):
-            self.assertEqual(self.policy.get_tax_rate('123456', 'AT'), None)
+            self.assertEqual(self.policy.get_tax_rate('123456', 'AT'), (None, True))
 
     @mock.patch("stdnum.eu.vat.check_vies")
     def test_company_EU_notsame_vies_not_ok(self, mock_check):
         mock_check.return_value = {'valid': False}
         with self.settings(PLANS_TAX=Decimal('23.0'), PLANS_TAX_COUNTRY='PL'):
-            self.assertEqual(self.policy.get_tax_rate('123456', 'AT'), Decimal('20.0'))
+            self.assertEqual(self.policy.get_tax_rate('123456', 'AT'), (Decimal('20.0'), True))
 
 
 class BillingInfoTestCase(TestCase):
@@ -801,6 +806,12 @@ class BillingInfoTestCase(TestCase):
 
     def test_clean_tax_number_valid_with_country(self):
         self.assertEqual(BillingInfo.clean_tax_number('CZ48136450', 'CZ'), 'CZ48136450')
+
+    def test_clean_tax_number_valid_with_country_GR(self):
+        self.assertEqual(BillingInfo.clean_tax_number('GR104594676', 'GR'), 'EL104594676')
+
+    def test_clean_tax_number_valid_with_country_EL(self):
+        self.assertEqual(BillingInfo.clean_tax_number('EL104594676', 'GR'), 'EL104594676')
 
     def test_clean_tax_number_vat_id_is_not_correct(self):
         with self.assertRaisesRegex(ValidationError, 'VAT ID is not correct'):
@@ -821,6 +832,8 @@ class CreateOrderViewTestCase(TestCase):
         request = self.factory.get('')
         middleware = SessionMiddleware(lambda x: x)
         middleware.process_request(request)
+        messages = FallbackStorage(request)
+        setattr(request, '_messages', messages)
         self.create_view = CreateOrderView()
         self.create_view.request = request
 
@@ -831,6 +844,15 @@ class CreateOrderViewTestCase(TestCase):
                 o = self.create_view.recalculate(10, BillingInfo(tax_number='48136450', country='CZ'))
                 self.assertEqual(o.tax, 21)
                 mock_logger.exception.assert_called_with("TAX_ID=CZ48136450")
+        message = self.create_view.request._messages._queued_messages[0].message
+        self.assertEqual(
+            message,
+            'There was an error during determining validity of your VAT ID.<br/>'
+            'If you think, you have european VAT ID and should not be taxed, '
+            'please try resaving billing info later.<br/><br/>'
+            'European VAT Information Exchange System throw following error: '
+            '&lt;urlopen error Internet is disabled&gt;',
+        )
 
     def test_recalculate_order(self):
         # BE 0203.201.340 is VAT ID of Belgium national bank.
@@ -901,7 +923,7 @@ class BillingInfoViewTestCase(TestCase):
         """
         Test, that default country is PL
         """
-        response = self.client.get(reverse('billing_info_create'))
+        response = self.client.get(reverse('billing_info'))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, '<option value="PL" selected>Poland</option>', html=True)
 
@@ -912,7 +934,7 @@ class BillingInfoViewTestCase(TestCase):
         """
         Test, that default country is PL
         """
-        response = self.client.get(reverse('billing_info_create'))
+        response = self.client.get(reverse('billing_info'))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, '<option value="PL" selected>Poland</option>', html=True)
 
@@ -921,7 +943,7 @@ class BillingInfoViewTestCase(TestCase):
         """
         Test, that default country is None
         """
-        response = self.client.get(reverse('billing_info_create'))
+        response = self.client.get(reverse('billing_info'))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, '<option value="" selected>---------</option>', html=True)
 
@@ -931,11 +953,11 @@ class BillingInfoViewTestCase(TestCase):
         Test, that default country is determined by German IP
         """
 
-        response = self.client.get(reverse('billing_info_create'), HTTP_X_FORWARDED_FOR='85.214.132.117')
+        response = self.client.get(reverse('billing_info'), HTTP_X_FORWARDED_FOR='85.214.132.117')
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, '<option value="DE" selected>Germany</option>', html=True)
 
-        response = self.client.get(reverse('billing_info_create'), REMOTE_ADDR='85.214.132.117')
+        response = self.client.get(reverse('billing_info'), REMOTE_ADDR='85.214.132.117')
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, '<option value="DE" selected>Germany</option>', html=True)
 
@@ -944,32 +966,50 @@ class BillingInfoViewTestCase(TestCase):
         Test, that default country is not determined
         """
 
-        response = self.client.get(reverse('billing_info_create'), HTTP_X_FORWARDED_FOR='85.214.132.117')
+        response = self.client.get(reverse('billing_info'), HTTP_X_FORWARDED_FOR='85.214.132.117')
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, '<option value="" selected>---------</option>', html=True)
 
-    def test_redirect_view_create(self):
+    def test_billing_info(self):
         """
-        Test, BillingInfoRedirectView
+        Test, BillingInfoCreateOrUpdateView and BillingInfoDeleteView views
         """
-
+        # Test get does not contain delete button
         response = self.client.get(reverse('billing_info'))
+        self.assertNotContains(response, '<a class="btn btn-danger" href="/plan/billing/delete/">Delete</a>', html=True)
+
+        # Test create
+        parameters = {
+            "country": "GR",
+            "tax_number": "GR104594676",
+            "name": "bar",
+            "street": "baz",
+            "city": "bay",
+            "zipcode": "bax",
+        }
+        response = self.client.post(reverse('billing_info') + "?next=/plan/pricing/", parameters)
         self.assertRedirects(
-            response, '/plan/billing/create/', status_code=302,
+            response, '/plan/pricing/', status_code=302,
             target_status_code=200, fetch_redirect_response=True,
         )
+        self.assertEqual(self.user.billinginfo.tax_number, "EL104594676")
 
-    def test_redirect_view_update_next(self):
-        """
-        Test, BillingInfoRedirectView redirects to next url, BillingInfo already exists
-        """
+        # Test get contains delete button
+        response = self.client.get(reverse('billing_info'))
+        self.assertContains(response, '<a class="btn btn-danger" href="/plan/billing/delete/">Delete</a>', html=True)
 
-        baker.make('BillingInfo', user=self.user)
-        response = self.client.get(reverse('billing_info') + "?next=foo")
-        self.assertRedirects(
-            response, '/plan/billing/update/?next=foo', status_code=302,
-            target_status_code=200, fetch_redirect_response=True,
-        )
+        # Test update
+        del parameters["tax_number"]
+        parameters["name"] = "foo"
+        response = self.client.post(reverse('billing_info') + "?next=/plan/pricing/", parameters)
+        self.user.billinginfo.refresh_from_db()
+        self.assertEqual(self.user.billinginfo.name, "foo")
+        self.assertEqual(self.user.billinginfo.tax_number, "")
+
+        # Test delete
+        response = self.client.post(reverse('billing_info_delete'))
+        with self.assertRaises(BillingInfo.DoesNotExist):
+            self.user.billinginfo.refresh_from_db()
 
 
 class RecurringPlansTestCase(TestCase):
@@ -1024,6 +1064,20 @@ class RecurringPlansTestCase(TestCase):
         )
         order = rup.create_renew_order()
         self.assertEqual(order.tax, 21)
+        self.assertEqual(rup.tax, 21)
+
+    def test_create_new_order_VIES_fault(self):
+        """ If VIES fails, we use last available TAX value """
+        rup = baker.make(
+            'RecurringUserPlan',
+            user_plan__user__billinginfo__country='CZ',
+            user_plan__user__billinginfo__tax_number="CZ0123",
+            amount=10,
+            tax=11,
+        )
+        with no_connection():
+            order = rup.create_renew_order()
+        self.assertEqual(order.tax, 11)
 
 
 class TasksTestCase(TestCase):
