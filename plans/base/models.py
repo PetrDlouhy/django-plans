@@ -620,6 +620,9 @@ class AbstractRecurringUserPlan(BaseMixin, models.Model):
     card_expire_year = models.IntegerField(null=True, blank=True)
     card_expire_month = models.IntegerField(null=True, blank=True)
     card_masked_number = models.CharField(null=True, blank=True, max_length=255)
+    last_renewal_attempt = models.DateTimeField(
+        _("last renewal attempt"), null=True, blank=True
+    )
 
     class Meta:
         abstract = True
@@ -955,6 +958,8 @@ class AbstractOrder(BaseMixin, models.Model):
                     f"Cannot return order with status other than COMPLETED and NOT_VALID: {self.status}"
                 )
             self.status = self.STATUS.RETURNED
+            for invoice in self.get_invoices():
+                invoice.cancel_invoice()
             self.save()
 
     def get_invoices_proforma(self):
@@ -962,6 +967,9 @@ class AbstractOrder(BaseMixin, models.Model):
 
     def get_invoices(self):
         return AbstractInvoice.get_concrete_model().invoices.filter(order=self)
+
+    def get_credit_notes(self):
+        return AbstractInvoice.get_concrete_model().credit_notes.filter(order=self)
 
     def get_all_invoices(self):
         return self.invoice_set.order_by("issued", "issued_duplicate", "pk")
@@ -1050,6 +1058,15 @@ class InvoiceDuplicateManager(models.Manager):
         )
 
 
+class CreditNoteManager(models.Manager):
+    def get_queryset(self):
+        return (
+            super(CreditNoteManager, self)
+            .get_queryset()
+            .filter(type=AbstractInvoice.INVOICE_TYPES["CREDIT_NOTE"])
+        )
+
+
 def get_initial_number(older_invoices):
     return (
         older_invoices.order_by("number").values_list("number", flat=True).last() or 0
@@ -1066,6 +1083,7 @@ class AbstractInvoice(BaseMixin, models.Model):
             (1, "INVOICE", _("Invoice")),
             (2, "DUPLICATE", _("Invoice Duplicate")),
             (3, "PROFORMA", pgettext_lazy("proforma", "Order confirmation")),
+            (4, "CREDIT_NOTE", _("Credit note")),
         ]
     )
 
@@ -1073,6 +1091,7 @@ class AbstractInvoice(BaseMixin, models.Model):
     invoices = InvoiceManager()
     proforma = InvoiceProformaManager()
     duplicates = InvoiceDuplicateManager()
+    credit_notes = CreditNoteManager()
 
     class NUMBERING:
         """Used as a choices for settings.PLANS_INVOICE_COUNTER_RESET"""
@@ -1086,6 +1105,14 @@ class AbstractInvoice(BaseMixin, models.Model):
     )
     order = models.ForeignKey(
         "Order", verbose_name=_("order"), on_delete=models.CASCADE
+    )
+    credit_note_for = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="issued_credit_notes",
+        verbose_name=_("Credit note for"),
     )
     number = models.IntegerField(db_index=True)
     full_number = models.CharField(max_length=200)
@@ -1137,6 +1164,7 @@ class AbstractInvoice(BaseMixin, models.Model):
     issuer_tax_number = models.CharField(
         max_length=200, blank=True, verbose_name=_("TAX/VAT number")
     )
+    cancellation_reason = models.TextField(_("Cancellation reason"), blank=True)
 
     class Meta:
         abstract = True
@@ -1359,3 +1387,108 @@ class AbstractInvoice(BaseMixin, models.Model):
 
     def is_UE_customer(self):
         return EUTaxationPolicy.is_in_EU(self.buyer_country.code)
+
+    def cancel_invoice(self, reason=""):
+        """
+        Cancels the invoice by creating a credit note.
+        It also returns the associated order.
+        """
+        Invoice = self.get_concrete_model()
+        if self.type != Invoice.INVOICE_TYPES.INVOICE:
+            raise ValidationError(_("Only invoices can be cancelled."))
+
+        if self.issued_credit_notes.exists():
+            raise ValidationError(
+                _("This invoice has already been cancelled by a credit note.")
+            )
+
+        # Create the credit note
+        credit_note = Invoice()
+        credit_note.type = Invoice.INVOICE_TYPES.CREDIT_NOTE
+        credit_note.credit_note_for = self
+        credit_note.cancellation_reason = reason
+
+        # Copy data from original invoice
+        credit_note.user = self.user
+        credit_note.order = self.order
+        credit_note.issued = date.today()
+        credit_note.payment_date = date.today()
+        credit_note.selling_date = self.selling_date
+
+        # Negate values
+        credit_note.unit_price_net = -self.unit_price_net
+        credit_note.quantity = self.quantity
+        credit_note.total_net = -self.total_net
+        credit_note.total = -self.total
+        credit_note.tax_total = -self.tax_total
+        credit_note.tax = self.tax  # Tax rate stays the same
+        credit_note.rebate = self.rebate
+        credit_note.currency = self.currency
+
+        credit_note.item_description = (
+            _("Credit note for invoice %s") % self.full_number
+        )
+        self._copy_addresses_to_credit_note(credit_note)
+
+        # Clean and save
+        credit_note.clean()  # This sets up numbering
+        credit_note.save()
+
+        return credit_note
+
+    def create_partial_credit_note(self, net_amount, tax_amount, reason=""):
+        """
+        Creates a partial credit note with custom amounts.
+        User input: positive = refund to customer, negative = additional charge.
+        """
+        Invoice = self.get_concrete_model()
+        if self.type != Invoice.INVOICE_TYPES.INVOICE:
+            raise ValidationError(_("Only invoices can have partial credit notes."))
+
+        credit_note = Invoice(
+            type=Invoice.INVOICE_TYPES.CREDIT_NOTE,
+            credit_note_for=self,
+            user=self.user,
+            order=self.order,
+            issued=date.today(),
+            payment_date=date.today(),
+            selling_date=self.selling_date,
+            unit_price_net=-net_amount,
+            quantity=1,
+            total_net=-net_amount,
+            tax_total=-tax_amount,
+            total=-(net_amount + tax_amount),
+            tax=self.tax,
+            rebate=self.rebate,
+            currency=self.currency,
+        )
+
+        total_user_input = net_amount + tax_amount
+        action = (
+            "Refund"
+            if total_user_input > 0
+            else "Additional charge" if total_user_input < 0 else "Adjustment"
+        )
+        credit_note.item_description = _("%s for invoice %s: %s") % (
+            action,
+            self.full_number,
+            reason,
+        )
+        credit_note.cancellation_reason = "%s: %s" % (action, reason)
+
+        self._copy_addresses_to_credit_note(credit_note)
+        credit_note.clean()
+        credit_note.save()
+        return credit_note
+
+    def _copy_addresses_to_credit_note(self, credit_note):
+        """Copy all address fields from invoice to credit note."""
+        address_prefixes = ("buyer_", "shipping_", "issuer_")
+        address_fields = [
+            field.name
+            for field in self._meta.fields
+            if any(field.name.startswith(prefix) for prefix in address_prefixes)
+            or field.name == "require_shipment"
+        ]
+        for field_name in address_fields:
+            setattr(credit_note, field_name, getattr(self, field_name))
